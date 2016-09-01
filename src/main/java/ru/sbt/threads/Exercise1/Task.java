@@ -5,24 +5,32 @@ import java.util.concurrent.Callable;
 
 public class Task<T> {
     private final Callable<? extends T> callable;
-    private volatile T object = null;
-    Object mutex = new Object();
+    private final Object lock = new Object();
+    private volatile boolean isCallable = false;
+    private T object = null;
+    private CallableException exception = null;
 
     public Task(Callable<? extends T> callable) {
         this.callable = callable;
     }
 
     public T get() {
-        if (object != null) {
-            return object;
-        }
-        synchronized (mutex) {
-            try {
-                object = callable.call();
-            } catch (Exception e) {
-                throw new CallableException(e);
+        if (!isCallable) {
+            synchronized (lock) {
+                if (!isCallable) {
+                    try {
+                        object = callable.call();
+                        isCallable = true;
+                    } catch (Exception e) {
+                        exception = new CallableException(e);
+                        throw exception;
+                    }
+                }
             }
         }
+
+        if (exception != null) throw exception;
+
         return object;
     }
 }
