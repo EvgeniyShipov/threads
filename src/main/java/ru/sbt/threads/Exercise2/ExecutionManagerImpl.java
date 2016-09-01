@@ -1,19 +1,22 @@
 package ru.sbt.threads.Exercise2;
 
 
+import java.util.ArrayDeque;
+import java.util.Queue;
+
 public class ExecutionManagerImpl implements ExecutionManager {
     private final ContextImpl context = new ContextImpl();
-    private final Semaphore semaphore;
+    private final FixedThreadPool threadPool;
 
     public ExecutionManagerImpl(int maximumTreads) {
-        semaphore = new Semaphore(maximumTreads);
+        threadPool = new FixedThreadPool(maximumTreads);
     }
 
     public Context execute(Runnable callback, Runnable... tasks) {
         try {
+            threadPool.start();
             for (Runnable r : tasks) {
-                Thread thread = new Thread(new taskWrapper(r));
-                thread.start();
+                threadPool.execute(r);
             }
         } finally {
             Thread callbackThread = new Thread(callback);
@@ -24,26 +27,48 @@ public class ExecutionManagerImpl implements ExecutionManager {
         return context;
     }
 
-    private class taskWrapper implements Runnable {
-        private Runnable task;
+    class FixedThreadPool {
+        private volatile Queue<Runnable> tasks = new ArrayDeque<>();
+        private final int threadCount;
 
-        private taskWrapper(Runnable task) {
-            this.task = task;
+        public FixedThreadPool(int threadCount) {
+            this.threadCount = threadCount;
         }
 
-        public void run() {
-            semaphore.enter();
-            if (!context.isInterrupt()) {
-                try {
-                    task.run();
-                } catch (Exception e) {
-                    context.addFailedTask();
-                    throw new RuntimeException(e);
-                } finally {
-                    context.addWellDoneTask();
-                    semaphore.exit();
+        public void start() {
+            for (int i = 0; i < threadCount; i++) {
+                new Worker().start();
+            }
+        }
+
+        public void execute(Runnable runnable) {
+            tasks.add(runnable);
+            notify();
+        }
+
+        public class Worker extends Thread {
+            @Override
+            public void run() {
+                while (true) {
+                    try {
+                        if (!tasks.isEmpty()) {
+                            Runnable poll = tasks.poll();
+                            if (!context.isInterrupt()) {
+                                try {
+                                    poll.run();
+                                    context.addWellDoneTask();
+                                } catch (Exception e) {
+                                    context.addFailedTask();
+                                }
+                            } else context.addInterruptedTask();
+
+                        } else wait();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
                 }
-            } else context.addInterruptedTask();
+            }
         }
     }
 }
+
